@@ -5,7 +5,7 @@
 #
 # -----------------------------------------------------------------------------
 
-from typing import Optional, Set, Tuple
+from typing import Set, Tuple
 
 import onnx
 from onnx import ModelProto
@@ -21,7 +21,7 @@ class InputsToInitTransform(OnnxTransform):
 
     @classmethod
     def apply(
-        cls, model: ModelProto, reference_model_path: str, input_names: Set, onnx_base_dir: Optional[str] = None
+        cls, model: ModelProto, *, reference_model_path: str, input_names: Set[str], **kwargs
     ) -> Tuple[ModelProto, bool]:
         reference_model = onnx.load(reference_model_path, load_external_data=False)
         initializers = {init.name: init for init in reference_model.graph.initializer}
@@ -55,7 +55,7 @@ class AddTrainingOpsTransform(OnnxTransform):
     """
 
     @classmethod
-    def apply(cls, model: ModelProto, onnx_base_dir: Optional[str] = None) -> Tuple[ModelProto, bool]:
+    def apply(cls, model: ModelProto, **kwargs) -> Tuple[ModelProto, bool]:
         model_function_names = set()
         model_functions = []
 
@@ -120,7 +120,7 @@ class AddOptimizerTransform(OnnxTransform):
     """
 
     @classmethod
-    def apply(cls, model: ModelProto, optimizer: str, onnx_base_dir: Optional[str] = None) -> Tuple[ModelProto, bool]:
+    def apply(cls, model: ModelProto, *, optimizer: str = "SGD", **kwargs) -> Tuple[ModelProto, bool]:
         transformed = False
 
         # Remove grad acc inputs

@@ -48,6 +48,7 @@ class QEffTrainer(Trainer):
         self.trainable_params = set([x for x, p in self.model.named_parameters() if p.requires_grad])
         self.frozen_params = set([x for x, p in self.model.named_parameters() if not p.requires_grad])
 
+        dataloader = dataloader or self.get_train_dataloader()
         for sample_input in dataloader:
             break
 
@@ -59,14 +60,16 @@ class QEffTrainer(Trainer):
 
         # Fix, Validate and Save training model
         train_onnx = onnx.load(self.train_onnx_path, load_external_data=False)
-        train_onnx, transformed = InputsToInitTransform.apply(train_onnx, self.model_onnx_path, self.frozen_params)
+        train_onnx, transformed = InputsToInitTransform.apply(
+            train_onnx, reference_model_path=self.model_onnx_path, input_names=self.frozen_params
+        )
         train_onnx, transformed = AddTrainingOpsTransform.apply(train_onnx)
         if self.args.validate:
             train_onnx_tmp_path = os.path.join(self.args.output_dir, "training_model_tmp.onnx")
             onnx.save(train_onnx, train_onnx_tmp_path)
             self._validate_with_onnxrt(self.train_onnx_path, train_onnx_tmp_path, sample_input, training=True)
             os.remove(train_onnx_tmp_path)
-        train_onnx = AddOptimizerTransform.apply(train_onnx)
+        train_onnx = AddOptimizerTransform.apply(train_onnx, optimizer=self.args.optim.upper())
         train_onnx = onnx.shape_inference.infer_shapes(train_onnx, True, True, True)
         self.train_onnx_path = os.path.join(self.args.output_dir, "training_model_modified.onnx")
         onnx.save(train_onnx, self.train_onnx_path)
@@ -83,7 +86,9 @@ class QEffTrainer(Trainer):
 
         # Fix, Validate and Save eval model
         eval_onnx = onnx.load(self.eval_onnx_path, load_external_data=False)
-        eval_onnx, transformed = InputsToInitTransform.apply(eval_onnx, self.eval_onnx_path, self.frozen_params)
+        eval_onnx, transformed = InputsToInitTransform.apply(
+            eval_onnx, reference_model_path=self.eval_onnx_path, input_names=self.frozen_params
+        )
         eval_onnx, transformed = AddTrainingOpsTransform.apply(eval_onnx)
         if self.args.validate:
             eval_onnx_tmp_path = os.path.join(self.args.output_dir, "eval_model_tmp.onnx")
