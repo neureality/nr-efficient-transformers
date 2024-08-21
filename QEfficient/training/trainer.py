@@ -21,9 +21,8 @@ from onnxruntime.training import artifacts, onnxblock
 from torch.utils.data import Dataset
 from transformers import Trainer
 
+from QEfficient.generation.cloud_infer import QAICInferenceSession
 from QEfficient.training.onnx_transforms import AddOptimizerTransform, AddTrainingOpsTransform, InputsToInitTransform
-
-from .qaic_infer import QAICInferenceSession
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +35,11 @@ class QEffTrainer(Trainer):
         if self.args.bf16 or self.args.bf16_full_eval:
             raise NotImplementedError("BF16 is not currently supported in QEfficient")
 
-        if not self.args.fp16:
+        if not self.args.qeff_fp16:
             warnings.warn("FP32 training will be very slow and may exceed memory; Try using FP16")
 
-        if not self.args.fp16_full_eval:
-            warnings.warn("FP32 evaluation will be very slow and may exceed memory; Try using FP16")
+        if not self.args.optim != "sgd":
+            raise NotImplementedError("Only SGD Optimizer supported for now")
 
         if self.args.auto_find_batch_size:
             raise NotImplementedError("auto_find_batch_size not supported currently")
@@ -69,7 +68,7 @@ class QEffTrainer(Trainer):
             onnx.save(train_onnx, train_onnx_tmp_path)
             self._validate_with_onnxrt(self.train_onnx_path, train_onnx_tmp_path, sample_input, training=True)
             os.remove(train_onnx_tmp_path)
-        train_onnx = AddOptimizerTransform.apply(train_onnx, optimizer=self.args.optim.upper())
+        train_onnx, transformed = AddOptimizerTransform.apply(train_onnx, optimizer="SGD")
         train_onnx = onnx.shape_inference.infer_shapes(train_onnx, True, True, True)
         self.train_onnx_path = os.path.join(self.args.output_dir, "training_model_modified.onnx")
         onnx.save(train_onnx, self.train_onnx_path)
@@ -87,7 +86,7 @@ class QEffTrainer(Trainer):
         # Fix, Validate and Save eval model
         eval_onnx = onnx.load(self.eval_onnx_path, load_external_data=False)
         eval_onnx, transformed = InputsToInitTransform.apply(
-            eval_onnx, reference_model_path=self.eval_onnx_path, input_names=self.frozen_params
+            eval_onnx, reference_model_path=self.model_onnx_path, input_names=self.frozen_params
         )
         eval_onnx, transformed = AddTrainingOpsTransform.apply(eval_onnx)
         if self.args.validate:
@@ -221,7 +220,7 @@ class QEffTrainer(Trainer):
             f"-aic-num-cores={self.args.num_cores}",
             "-compile-only",
         ]
-        if self.args.fp16:
+        if self.args.qeff_fp16:
             args.append("-convert-to-fp16")
         if self.args.mxfp6_matmul:
             args.append("-mxfp6-matmul")
@@ -230,7 +229,7 @@ class QEffTrainer(Trainer):
             [
                 *args,
                 f"-m={self.train_onnx_path}",
-                f"-custom-IO-list-file={self.custom_io_train_path}" if self.args.fp16 else "",
+                f"-custom-IO-list-file={self.custom_io_train_path}" if self.args.qeff_fp16 else "",
                 f"-aic-binary-dir={self.train_qpc_path}",
             ]
         ).check_returncode()
@@ -239,7 +238,7 @@ class QEffTrainer(Trainer):
             [
                 *args,
                 f"-m={self.eval_onnx_path}",
-                f"-custom-IO-list-file={self.custom_io_eval_path}" if self.args.fp16 else "",
+                f"-custom-IO-list-file={self.custom_io_eval_path}" if self.args.qeff_fp16 else "",
                 f"-aic-binary-dir={self.eval_qpc_path}",
             ]
         ).check_returncode()
