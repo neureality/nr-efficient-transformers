@@ -26,7 +26,7 @@ from QEfficient.training.onnx_transforms import (
     AddOptimizerTransform,
     AddTrainingOpsTransform,
     InputsToInitTransform,
-    RemoveAdapterName,
+    RemoveAdapterNameTransform,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,7 +173,7 @@ class QEffTrainer(Trainer):
                 return self.build(*inputs)
 
         # Remove the adapter name by renaming the intializers
-        onnx_model, transformed = RemoveAdapterName.apply(onnx_model, adapter_name=self.args.adapter_name)
+        onnx_model, transformed = RemoveAdapterNameTransform.apply(onnx_model, adapter_name=self.args.adapter_name)
         self.trainable_params = {
             x[: -len(f".{self.args.adapter_name}.weight")] + ".weight" for x in self.trainable_params
         }

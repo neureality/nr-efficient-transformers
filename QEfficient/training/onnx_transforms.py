@@ -14,7 +14,7 @@ from QEfficient.base.onnx_transforms import OnnxTransform
 from QEfficient.training.training_ops import aisw_opset, cloud_opset, dynamic_functions, functions
 
 
-class RemoveAdapterName(OnnxTransform):
+class RemoveAdapterNameTransform(OnnxTransform):
     """
     Remove the adapter names from parameters
     """
