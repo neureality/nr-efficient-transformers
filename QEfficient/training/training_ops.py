@@ -33,7 +33,7 @@ def ConcatTraining(*inputs: Union[ValueInfoProto, str], axis: int, memo={}) -> T
 
     fn_src += "op.Concat("
     for i in range(num_inputs):
-        fn_src += f"op.GatherElements(op.Shape(input{i}), op.Unsqueeze(op.Constant(value_int=axis), 0)), "
+        fn_src += f"op.Unsqueeze(op.Gather(op.Shape(input{i}), op.Constant(value_int=axis)), 0), "
     fn_src += "axis=0)"
 
     func_def = ast.parse(fn_src).body[0]
