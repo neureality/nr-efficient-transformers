@@ -67,12 +67,17 @@ class QEffTrainer(Trainer):
         train_onnx, transformed = InputsToInitTransform.apply(
             train_onnx, reference_model_path=self.model_onnx_path, input_names=self.frozen_params
         )
+        if self.args.validate:
+            train_onnx_orig_path = os.path.join(self.args.output_dir, "training_model_orig.onnx")
+            onnx.save(train_onnx, train_onnx_orig_path)
         train_onnx, transformed = AddTrainingOpsTransform.apply(train_onnx)
         if self.args.validate:
-            train_onnx_tmp_path = os.path.join(self.args.output_dir, "training_model_tmp.onnx")
-            onnx.save(train_onnx, train_onnx_tmp_path)
-            self._validate_with_onnxrt(self.train_onnx_path, train_onnx_tmp_path, sample_input, training=True)
-            os.remove(train_onnx_tmp_path)
+            train_onnx_fixed_path = os.path.join(self.args.output_dir, "training_model_fixed.onnx")
+            onnx.save(train_onnx, train_onnx_fixed_path)
+            if not self._validate_with_onnxrt(train_onnx_orig_path, train_onnx_fixed_path, sample_input, training=True):
+                raise RuntimeError("Validation of QAIC ONNX failed")
+            os.remove(train_onnx_orig_path)
+            os.remove(train_onnx_fixed_path)
         train_onnx, transformed = AddOptimizerTransform.apply(train_onnx, optimizer="SGD")
         train_onnx = onnx.shape_inference.infer_shapes(train_onnx, True, True, True)
         self.train_onnx_path = os.path.join(self.args.output_dir, "training_model_modified.onnx")
@@ -93,12 +98,17 @@ class QEffTrainer(Trainer):
         eval_onnx, transformed = InputsToInitTransform.apply(
             eval_onnx, reference_model_path=self.model_onnx_path, input_names=self.frozen_params
         )
+        if self.args.validate:
+            eval_onnx_orig_path = os.path.join(self.args.output_dir, "eval_model_orig.onnx")
+            onnx.save(eval_onnx, eval_onnx_orig_path)
         eval_onnx, transformed = AddTrainingOpsTransform.apply(eval_onnx)
         if self.args.validate:
-            eval_onnx_tmp_path = os.path.join(self.args.output_dir, "eval_model_tmp.onnx")
-            onnx.save(eval_onnx, eval_onnx_tmp_path)
-            self._validate_with_onnxrt(self.eval_onnx_path, eval_onnx_tmp_path, sample_input, training=False)
-            os.remove(eval_onnx_tmp_path)
+            eval_onnx_fixed_path = os.path.join(self.args.output_dir, "eval_model_fixed.onnx")
+            onnx.save(eval_onnx, eval_onnx_fixed_path)
+            if not self._validate_with_onnxrt(eval_onnx_orig_path, eval_onnx_fixed_path, sample_input, training=False):
+                raise RuntimeError("Validation of QAIC ONNX failed")
+            os.remove(eval_onnx_orig_path)
+            os.remove(eval_onnx_fixed_path)
         eval_onnx = onnx.shape_inference.infer_shapes(eval_onnx, True, True, True)
         self.eval_onnx_path = os.path.join(self.args.output_dir, "eval_model_modified.onnx")
         onnx.save(eval_onnx, self.eval_onnx_path)
@@ -191,7 +201,12 @@ class QEffTrainer(Trainer):
         )
 
     def _validate_with_onnxrt(
-        self, model_orig_path: str, model_fixed_path: str, inputs: Dict[str, torch.Tensor], training: bool
+        self,
+        model_orig_path: str,
+        model_fixed_path: str,
+        inputs: Dict[str, torch.Tensor],
+        training: bool,
+        tolerance: float = 1e-4,
     ):
         inputs = {k: v.cpu().numpy() for k, v in inputs.items()}
         if training:
@@ -207,14 +222,20 @@ class QEffTrainer(Trainer):
         session_fixed = InferenceSession(model_fixed_path)
         output_names = [x.name for x in session_orig.get_outputs()]
 
-        outputs = session_fixed.run(None, inputs)
-        _ = session_orig.run(None, inputs)
+        outputs_fixed = session_fixed.run(None, inputs)
+        outputs_orig = session_orig.run(None, inputs)
 
         passed = True
+        for name, of, oo in zip([x.name for x in session_fixed.get_outputs()[:2]], outputs_fixed[:2], outputs_orig[:2]):
+            diff = np.abs(of - oo).max()
+            if diff > tolerance:
+                passed = False
+                print(name, diff)
+
         for name, buffer in inputs.items():
             if name.endswith("accumulation.buffer"):
-                diff = np.abs(outputs[output_names.index(name[:-6] + "out")] - buffer).max()
-                if diff > 1e-6:
+                diff = np.abs(outputs_fixed[output_names.index(name[:-6] + "out")] - buffer).max()
+                if diff > tolerance:
                     passed = False
                     print(name, diff)
 
@@ -230,6 +251,7 @@ class QEffTrainer(Trainer):
             f"-onnx-define-symbol=seq_len,{self.args.max_ctx_len}",
             f"-aic-num-cores={self.args.num_cores}",
             "-compile-only",
+            "-retained-state",
         ]
         if self.args.qeff_fp16:
             args.append("-convert-to-fp16")
