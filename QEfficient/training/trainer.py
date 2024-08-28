@@ -278,6 +278,15 @@ class QEffTrainer(Trainer):
         assert batch_size == self._train_batch_size, "Incorrectly compiled qpc"
         assert seq_len == self.args.max_ctx_len, "Incorrectly compiled qpc"
 
+        # Load the parameters
+        params = {
+            k: v.numpy().astype("float16") for k, v in self.model.state_dict().items() if k in self.trainable_params
+        }
+        params["lr"] = np.array(0.00, dtype="float32")
+        self.model_wrapped.run(params)
+        self.model_wrapped.skip_buffers(self.trainable_params)
+        self.model_wrapped.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
+
     def training_step(self, inputs):
         # TODO: implement
         raise NotImplementedError()
