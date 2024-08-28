@@ -18,6 +18,7 @@ import torch
 from onnxruntime import InferenceSession
 from onnxruntime.training import api as ort_train_api
 from onnxruntime.training import artifacts, onnxblock
+from peft import PeftModelForCausalLM
 from torch.utils.data import Dataset
 from transformers import Trainer
 
@@ -36,6 +37,9 @@ class QEffTrainer(Trainer):
     def _wrap_model(self, model, training=True, dataloader=None):
         if getattr(self, "_wrapped", False):
             return model
+
+        if not isinstance(model, PeftModelForCausalLM):
+            raise NotImplementedError("Only PEFT fine-tuning is supported")
 
         if self.args.bf16 or self.args.bf16_full_eval:
             raise NotImplementedError("BF16 is not currently supported in QEfficient")
