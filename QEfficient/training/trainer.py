@@ -51,6 +51,13 @@ class QEffTrainer(Trainer):
         self.trainable_params = set([x for x, p in self.model.named_parameters() if p.requires_grad])
         self.frozen_params = set([x for x, p in self.model.named_parameters() if not p.requires_grad])
 
+        self.train_qpc_path = os.path.join(self.args.qpc_path, "train")
+        self.eval_qpc_path = os.path.join(self.args.qpc_path, "eval")
+        if os.path.isdir(self.train_qpc_path):
+            if os.path.isfile(os.path.join(self.train_qpc_path, "programqpc.bin")):
+                self._load_models()
+                return model
+
         dataloader = dataloader or self.get_train_dataloader()
         for sample_input in dataloader:
             break
@@ -126,10 +133,6 @@ class QEffTrainer(Trainer):
         # self.custom_io_eval_path = os.path.join(self.args.output_dir, "custom_io_eval.yaml")
 
         self._compile_models()
-
-        # self.train_qpc_path = os.path.join(self.args.qpc_path, "train")
-        # self.eval_qpc_path = os.path.join(self.args.qpc_path, "eval")
-
         self._load_models()
 
         self._wrapped = True
@@ -250,7 +253,6 @@ class QEffTrainer(Trainer):
             args.append("-convert-to-fp16")
         if self.args.mxfp6_matmul:
             args.append("-mxfp6-matmul")
-        self.train_qpc_path = os.path.join(self.args.qpc_path, "train")
         subprocess.run(
             [
                 *args,
@@ -259,7 +261,6 @@ class QEffTrainer(Trainer):
                 f"-aic-binary-dir={self.train_qpc_path}",
             ]
         ).check_returncode()
-        self.eval_qpc_path = os.path.join(self.args.qpc_path, "eval")
         subprocess.run(
             [
                 *args,
