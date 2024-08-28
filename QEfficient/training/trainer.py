@@ -23,12 +23,7 @@ from torch.utils.data import Dataset
 from transformers import Trainer
 
 from QEfficient.generation.cloud_infer import QAICInferenceSession
-from QEfficient.training.onnx_transforms import (
-    AddOptimizerTransform,
-    AddTrainingOpsTransform,
-    InputsToInitTransform,
-    RemoveAdapterNameTransform,
-)
+from QEfficient.training.onnx_transforms import AddOptimizerTransform, AddTrainingOpsTransform, InputsToInitTransform
 
 logger = logging.getLogger(__name__)
 
@@ -185,12 +180,6 @@ class QEffTrainer(Trainer):
             def __call__(self, *inputs):
                 # Fixes onnx checker issue
                 return self.build(*inputs)
-
-        # Remove the adapter name by renaming the intializers
-        onnx_model, transformed = RemoveAdapterNameTransform.apply(onnx_model, adapter_name=self.args.adapter_name)
-        self.trainable_params = {
-            x[: -len(f".{self.args.adapter_name}.weight")] + ".weight" for x in self.trainable_params
-        }
 
         artifacts.generate_artifacts(
             onnx_model,

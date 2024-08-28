@@ -14,36 +14,6 @@ from QEfficient.base.onnx_transforms import OnnxTransform
 from QEfficient.training.training_ops import aisw_opset, cloud_opset, dynamic_functions, functions
 
 
-class RemoveAdapterNameTransform(OnnxTransform):
-    """
-    Remove the adapter names from parameters
-    """
-
-    @classmethod
-    def apply(cls, model: ModelProto, *, adapter_name: str) -> Tuple[ModelProto, bool]:
-        # Find nodes with lora weights as inputs
-        weight_suffix = f".{adapter_name}.weight"
-        lora_weight_nodes = {
-            inp: node for node in model.graph.node for inp in node.input if inp.endswith(weight_suffix)
-        }
-        transformed = False
-        for i, weight in enumerate(model.graph.initializer):
-            if weight.name.endswith(weight_suffix):
-                transformed = True
-
-                # Rename weight input
-                new_weight_name = weight.name[: -len(weight_suffix)] + ".weight"
-                lora_weight_node = lora_weight_nodes[weight.name]
-                for j, inp in enumerate(lora_weight_node.input):
-                    if inp.endswith(weight_suffix):
-                        lora_weight_node.input[j] = new_weight_name
-
-                # Rename weight initializer
-                model.graph.initializer[i].name = new_weight_name
-
-        return model, transformed
-
-
 class InputsToInitTransform(OnnxTransform):
     """
     Converts inputs into initializers, copying from a reference model.
