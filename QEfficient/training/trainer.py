@@ -9,7 +9,7 @@ import logging
 import os
 import subprocess
 import warnings
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import onnx
@@ -19,7 +19,6 @@ from onnxruntime import InferenceSession
 from onnxruntime.training import api as ort_train_api
 from onnxruntime.training import artifacts, onnxblock
 from peft import PeftModelForCausalLM
-from torch.utils.data import Dataset
 from transformers import Trainer
 from transformers.training_args import OptimizerNames
 
@@ -288,19 +287,55 @@ class QEffTrainer(Trainer):
         self.model_wrapped.skip_buffers(self.trainable_params)
         self.model_wrapped.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
 
-    def training_step(self, inputs):
-        # TODO: implement
-        raise NotImplementedError()
+    def training_step(self, model: torch.nn.Module, inputs: Dict[str, torch.Tensor]) -> torch.Tensor:
+        self.eval_wrapped.deactivate()
+        self.model_wrapped.activate()
 
-    def evaluate(
+        inputs = {k: v.numpy() for k, v in inputs.items()}
+        inputs["lr"] = np.array(self.args.learning_rate, dtype="float32")
+        outputs = self.model_wrapped.run(inputs)
+        loss = torch.from_numpy(outputs["loss"])
+        self._params_obtained = False
+        return loss
+
+    def _obtain_params(self):
+        if self._params_obtained:
+            return
+        self.model_wrapped.set_buffers(
+            {
+                k + "_RetainedState": np.zeros(v.shape, dtype="float16")
+                for k, v in self.model.state_dict().items()
+                if k in self.trainable_params
+            }
+        )
+        outputs = self.model_wrapped.run({"lr": np.array(0.0, dtype="float32")})
+        self._trained_params = {
+            k[: -len("_RetainedState")]: v for k, v in outputs.items() if k.endswith("_RetainedState")
+        }
+        self.model_wrapped.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
+        self._params_obtained = True
+
+    def prediction_step(
         self,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        model: torch.nn.Module,
+        inputs: Dict[str, torch.Tensor],
+        prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
-        metric_key_prefix: str = "eval",
-    ) -> Dict[str, float]:
-        # TODO: implement
-        raise NotImplementedError()
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        self.model_wrapped.deactivate()
+        self.eval_wrapped.activate()
 
-    def _save_checkpoint(self, model, trial, metrics=None):
+        self._obtain_params()
+        self.eval_wrapped.set_buffers(self._trained_params)
+        inputs = {k: v.numpy() for k, v in inputs.items()}
+        outputs = self.eval_wrapped.run(inputs)
+        loss = torch.from_numpy(outputs["loss"])
+        logits = torch.from_numpy(outputs["logits"])
+        labels = inputs.get("labels")
+        if labels:
+            labels = torch.from_numpy(labels)
+        return loss, logits, labels
+
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         # TODO: implement
         raise NotImplementedError()
