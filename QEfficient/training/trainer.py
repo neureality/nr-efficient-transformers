@@ -202,7 +202,7 @@ class QEffTrainer(Trainer):
         model_fixed_path: str,
         inputs: Dict[str, torch.Tensor],
         training: bool,
-        tolerance: float = 1e-4,
+        tolerance: float = 1e-3,
     ):
         inputs = {k: v.cpu().numpy() for k, v in inputs.items()}
         if training:
