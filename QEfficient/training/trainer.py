@@ -252,7 +252,7 @@ class QEffTrainer(Trainer):
             args.append("-convert-to-fp16")
         if self.args.mxfp6_matmul:
             args.append("-mxfp6-matmul")
-        subprocess.run(
+        train_proc = subprocess.Popen(
             [
                 *args,
                 f"-onnx-define-symbol=batch_size,{self.args.train_batch_size}",
@@ -260,8 +260,8 @@ class QEffTrainer(Trainer):
                 f"-custom-IO-list-file={self.custom_io_train_path}" if self.args.qeff_fp16 else "",
                 f"-aic-binary-dir={self.train_qpc_path}",
             ]
-        ).check_returncode()
-        subprocess.run(
+        )
+        eval_proc = subprocess.Popen(
             [
                 *args,
                 f"-onnx-define-symbol=batch_size,{self.args.eval_batch_size}",
@@ -269,7 +269,11 @@ class QEffTrainer(Trainer):
                 f"-custom-IO-list-file={self.custom_io_eval_path}" if self.args.qeff_fp16 else "",
                 f"-aic-binary-dir={self.eval_qpc_path}",
             ]
-        ).check_returncode()
+        )
+        if eval_proc.wait() != 0:
+            raise subprocess.CalledProcessError(eval_proc.returncode, eval_proc.args)
+        if train_proc.wait() != 0:
+            raise subprocess.CalledProcessError(train_proc.returncode, train_proc.args)
 
     def _load_models(self):
         self.eval_session = QAICInferenceSession(self.eval_qpc_path, self.args.device_ids, activate=False)
