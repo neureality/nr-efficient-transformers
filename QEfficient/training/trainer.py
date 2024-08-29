@@ -243,7 +243,6 @@ class QEffTrainer(Trainer):
             "/opt/qti-aic/exec/qaic-exec",
             "-aic-hw",
             "-aic-hw-version=2.0",
-            f"-onnx-define-symbol=batch_size,{self._train_batch_size}",
             f"-onnx-define-symbol=seq_len,{self.args.max_ctx_len}",
             f"-aic-num-cores={self.args.num_cores}",
             "-compile-only",
@@ -256,6 +255,7 @@ class QEffTrainer(Trainer):
         subprocess.run(
             [
                 *args,
+                f"-onnx-define-symbol=batch_size,{self.args.train_batch_size}",
                 f"-m={self.train_onnx_path}",
                 f"-custom-IO-list-file={self.custom_io_train_path}" if self.args.qeff_fp16 else "",
                 f"-aic-binary-dir={self.train_qpc_path}",
@@ -264,6 +264,7 @@ class QEffTrainer(Trainer):
         subprocess.run(
             [
                 *args,
+                f"-onnx-define-symbol=batch_size,{self.args.eval_batch_size}",
                 f"-m={self.eval_onnx_path}",
                 f"-custom-IO-list-file={self.custom_io_eval_path}" if self.args.qeff_fp16 else "",
                 f"-aic-binary-dir={self.eval_qpc_path}",
