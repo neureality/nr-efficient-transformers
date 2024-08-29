@@ -58,6 +58,8 @@ pip install build wheel
 python -m build --wheel --outdir dist
 pip install dist/QEfficient-0.0.1.dev0-py3-none-any.whl
 
+# Refine/Finetune Setup
+pip uninstall -y onnxruntime && pip install .'[refine]'
 ``` 
 
 For more details about using ``QEfficient`` via Cloud AI 100 Apps SDK, visit [Linux Installation Guide](https://quic.github.io/efficient-transformers/source/Linux_installation.html)
