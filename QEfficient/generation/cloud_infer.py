@@ -107,11 +107,17 @@ class QAICInferenceSession:
     def activate(self):
         """Activate qpc"""
 
+        if hasattr(self, "execObj"):
+            return
+
         self.program.activate()
         self.execObj = qaicrt.ExecObj(self.context, self.program)
 
     def deactivate(self):
         """Deactivate qpc"""
+
+        if not hasattr(self, "execObj"):
+            return
 
         del self.execObj
         self.program.deactivate()

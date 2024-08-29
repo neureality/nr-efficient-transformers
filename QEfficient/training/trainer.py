@@ -21,6 +21,7 @@ from onnxruntime.training import artifacts, onnxblock
 from peft import PeftModelForCausalLM
 from torch.utils.data import Dataset
 from transformers import Trainer
+from transformers.training_args import OptimizerNames
 
 from QEfficient.generation.cloud_infer import QAICInferenceSession
 from QEfficient.training.onnx_transforms import AddOptimizerTransform, AddTrainingOpsTransform, InputsToInitTransform
@@ -32,6 +33,7 @@ class QEffTrainer(Trainer):
     def _wrap_model(self, model, training=True, dataloader=None):
         if getattr(self, "_wrapped", False):
             return model
+        self._wrapped = True
 
         if not isinstance(model, PeftModelForCausalLM):
             raise NotImplementedError("Only PEFT fine-tuning is supported")
@@ -42,7 +44,7 @@ class QEffTrainer(Trainer):
         if not self.args.qeff_fp16:
             warnings.warn("FP32 training will be very slow and may exceed memory; Try using FP16")
 
-        if not self.args.optim != "sgd":
+        if not (self.args.optim == "sgd" or self.args.optim == OptimizerNames.SGD):
             raise NotImplementedError("Only SGD Optimizer supported for now")
 
         if self.args.auto_find_batch_size:
@@ -135,7 +137,6 @@ class QEffTrainer(Trainer):
         self._compile_models()
         self._load_models()
 
-        self._wrapped = True
         return model
 
     def _export_onnx(self, inputs: Dict[str, torch.Tensor]) -> str:
@@ -272,7 +273,7 @@ class QEffTrainer(Trainer):
 
     def _load_models(self):
         self.eval_wrapped = QAICInferenceSession(self.eval_qpc_path, self.args.device_ids, activate=False)
-        self.model_wrapped = QAICInferenceSession(self.train_qpc_path, self.args.device_ids)
+        self.model_wrapped = QAICInferenceSession(self.train_qpc_path, self.args.device_ids, activate=True)
 
         batch_size, seq_len = self.model_wrapped.bindings[self.model_wrapped.binding_index_map["input_ids"]].dims
         assert batch_size == self._train_batch_size, "Incorrectly compiled qpc"
@@ -282,7 +283,7 @@ class QEffTrainer(Trainer):
         params = {
             k: v.numpy().astype("float16") for k, v in self.model.state_dict().items() if k in self.trainable_params
         }
-        params["lr"] = np.array(0.00, dtype="float32")
+        params["lr"] = np.array(0.0, dtype="float32")
         self.model_wrapped.run(params)
         self.model_wrapped.skip_buffers(self.trainable_params)
         self.model_wrapped.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
