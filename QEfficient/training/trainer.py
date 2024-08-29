@@ -276,7 +276,7 @@ class QEffTrainer(Trainer):
         self.model_wrapped = QAICInferenceSession(self.train_qpc_path, self.args.device_ids, activate=True)
 
         batch_size, seq_len = self.model_wrapped.bindings[self.model_wrapped.binding_index_map["input_ids"]].dims
-        assert batch_size == self._train_batch_size, "Incorrectly compiled qpc"
+        assert batch_size == self.args.train_batch_size, "Incorrectly compiled qpc"
         assert seq_len == self.args.max_ctx_len, "Incorrectly compiled qpc"
 
         # Load the parameters
@@ -323,17 +323,18 @@ class QEffTrainer(Trainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        self._obtain_params()
+
         self.model_wrapped.deactivate()
         self.eval_wrapped.activate()
 
-        self._obtain_params()
         self.eval_wrapped.set_buffers(self._trained_params)
         inputs = {k: v.numpy() for k, v in inputs.items()}
         outputs = self.eval_wrapped.run(inputs)
         loss = torch.from_numpy(outputs["loss"])
         logits = torch.from_numpy(outputs["logits"])
         labels = inputs.get("labels")
-        if labels:
+        if labels is not None:
             labels = torch.from_numpy(labels)
         return loss, logits, labels
 
