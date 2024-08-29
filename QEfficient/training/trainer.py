@@ -338,5 +338,8 @@ class QEffTrainer(Trainer):
         return loss, logits, labels
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        # TODO: implement
-        raise NotImplementedError()
+        self._obtain_params()
+        self.model.load_state_dict(
+            {k: torch.from_numpy(v).to(torch.float32) for k, v in self._trained_params.items()}, strict=False
+        )
+        super().save_model(output_dir, _internal_call)
