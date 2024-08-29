@@ -6,6 +6,7 @@
 # -----------------------------------------------------------------------------
 
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -25,5 +26,8 @@ class QEffTrainingArguments(TrainingArguments):
 
     def __post_init__(self):
         super().__post_init__()
+        if not self.dataloader_drop_last:
+            warnings.warn("overriding to dataloader_drop_last=True", UserWarning)
+            self.dataloader_drop_last = True
         if self.qpc_path is None:
             self.qpc_path = os.path.join(self.output_dir, "qpc")
