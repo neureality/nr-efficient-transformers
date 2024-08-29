@@ -272,10 +272,10 @@ class QEffTrainer(Trainer):
         ).check_returncode()
 
     def _load_models(self):
-        self.eval_wrapped = QAICInferenceSession(self.eval_qpc_path, self.args.device_ids, activate=False)
-        self.model_wrapped = QAICInferenceSession(self.train_qpc_path, self.args.device_ids, activate=True)
+        self.eval_session = QAICInferenceSession(self.eval_qpc_path, self.args.device_ids, activate=False)
+        self.train_session = QAICInferenceSession(self.train_qpc_path, self.args.device_ids, activate=True)
 
-        batch_size, seq_len = self.model_wrapped.bindings[self.model_wrapped.binding_index_map["input_ids"]].dims
+        batch_size, seq_len = self.train_session.bindings[self.train_session.binding_index_map["input_ids"]].dims
         assert batch_size == self.args.train_batch_size, "Incorrectly compiled qpc"
         assert seq_len == self.args.max_ctx_len, "Incorrectly compiled qpc"
 
@@ -284,17 +284,17 @@ class QEffTrainer(Trainer):
             k: v.numpy().astype("float16") for k, v in self.model.state_dict().items() if k in self.trainable_params
         }
         params["lr"] = np.array(0.0, dtype="float32")
-        self.model_wrapped.run(params)
-        self.model_wrapped.skip_buffers(self.trainable_params)
-        self.model_wrapped.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
+        self.train_session.run(params)
+        self.train_session.skip_buffers(self.trainable_params)
+        self.train_session.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
 
     def training_step(self, model: torch.nn.Module, inputs: Dict[str, torch.Tensor]) -> torch.Tensor:
-        self.eval_wrapped.deactivate()
-        self.model_wrapped.activate()
+        self.eval_session.deactivate()
+        self.train_session.activate()
 
         inputs = {k: v.numpy() for k, v in inputs.items()}
         inputs["lr"] = np.array(self.args.learning_rate, dtype="float32")
-        outputs = self.model_wrapped.run(inputs)
+        outputs = self.train_session.run(inputs)
         loss = torch.from_numpy(outputs["loss"])
         self._params_obtained = False
         return loss
@@ -302,18 +302,18 @@ class QEffTrainer(Trainer):
     def _obtain_params(self):
         if self._params_obtained:
             return
-        self.model_wrapped.set_buffers(
+        self.train_session.set_buffers(
             {
                 k + "_RetainedState": np.zeros(v.shape, dtype="float16")
                 for k, v in self.model.state_dict().items()
                 if k in self.trainable_params
             }
         )
-        outputs = self.model_wrapped.run({"lr": np.array(0.0, dtype="float32")})
+        outputs = self.train_session.run({"lr": np.array(0.0, dtype="float32")})
         self._trained_params = {
             k[: -len("_RetainedState")]: v for k, v in outputs.items() if k.endswith("_RetainedState")
         }
-        self.model_wrapped.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
+        self.train_session.skip_buffers([x + "_RetainedState" for x in self.trainable_params])
         self._params_obtained = True
 
     def prediction_step(
@@ -325,12 +325,12 @@ class QEffTrainer(Trainer):
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         self._obtain_params()
 
-        self.model_wrapped.deactivate()
-        self.eval_wrapped.activate()
+        self.train_session.deactivate()
+        self.eval_session.activate()
 
-        self.eval_wrapped.set_buffers(self._trained_params)
+        self.eval_session.set_buffers(self._trained_params)
         inputs = {k: v.numpy() for k, v in inputs.items()}
-        outputs = self.eval_wrapped.run(inputs)
+        outputs = self.eval_session.run(inputs)
         loss = torch.from_numpy(outputs["loss"])
         logits = torch.from_numpy(outputs["logits"])
         labels = inputs.get("labels")
