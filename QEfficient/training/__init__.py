@@ -4,3 +4,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # -----------------------------------------------------------------------------
+
+from QEfficient.training.trainer import QEffTrainer
+from QEfficient.training.training_args import QEffTrainingArguments
+
+__all__ = [
+    "QEffTrainer",
+    "QEffTrainingArguments",
+]
