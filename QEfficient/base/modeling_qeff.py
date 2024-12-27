@@ -131,6 +131,7 @@ class QEFFBaseModel(ABC):
             :export_dir (str): Specify the export directory. The export_dir will be suffixed with a hash corresponding to current model.
         """
         export_dir = Path(export_dir or (QEFF_HOME / self.model_name))
+        breakpoint()
         export_dir = export_dir.with_name(export_dir.name + "-" + self.model_hash)
         onnx_path = export_dir / f"{self.model_name}.onnx"
         if onnx_path.is_file():
@@ -251,9 +252,7 @@ class QEFFBaseModel(ABC):
 
         # Check if already compiled
         compile_hash = compile_hash.hexdigest()[:16]
-        compile_dir = qpc_path.with_name(qpc_path.name + "-" + compile_hash)
-        qpc_path = compile_dir / "qpc"
-        qpc_path.mkdir(parents=True, exist_ok=True)
+        qpc_path = qpc_path.with_name(qpc_path.name + "-" + compile_hash)
         if qpc_path.is_dir():
             if (qpc_path / "programqpc.bin").is_file():
                 self.qpc_path = qpc_path

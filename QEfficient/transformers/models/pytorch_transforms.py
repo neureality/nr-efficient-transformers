@@ -84,6 +84,7 @@ from transformers.models.phi3.modeling_phi3 import (
     Phi3Model,
     Phi3RMSNorm,
 )
+
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Attention,
     Qwen2DecoderLayer,
@@ -101,6 +102,7 @@ from transformers.models.starcoder2.modeling_starcoder2 import (
 from QEfficient.base.pytorch_transforms import ModuleMappingTransform
 from QEfficient.customop import CustomRMSNormAIC, GemmaCustomRMSNormAIC
 from QEfficient.transformers.cache_utils import QEffDynamicCache
+
 from QEfficient.transformers.models.codegen.modeling_codegen import (
     QEffCodeGenAttention,
     QeffCodeGenBlock,
@@ -182,12 +184,23 @@ from QEfficient.transformers.models.phi.modeling_phi import (
     QEffPhiForCausalLM,
     QEffPhiModel,
 )
+from QEfficient.transformers.models.phi3_vision.modeling_phi3_vision import(
+     QEffPhi3VModel,
+     QEffPhi3VAttention,
+     QEffPhi3RotaryEmbedding,
+     QEffPhi3VForCausalLM,
+     QEffPhi3VDecoderLayer,
+     QEffPhi3ImageEmbedding,
+)
+from QEfficient.transformers.models.phi3_vision.modeling_phi3_v import Phi3VForCausalLM
 from QEfficient.transformers.models.phi3.modeling_phi3 import (
     QEffPhi3Attention,
     QEffPhi3DecoderLayer,
     QEffPhi3ForCausalLM,
     QEffPhi3Model,
 )
+
+
 from QEfficient.transformers.models.qwen2.modeling_qwen2 import (
     QEffQwen2Attention,
     QEffQwen2DecoderLayer,
@@ -243,16 +256,19 @@ class KVCacheTransform(ModuleMappingTransform):
         LlamaDecoderLayer: QEffLlamaDecoderLayer,
         LlamaModel: QEffLlamaModel,
         LlamaForCausalLM: QEffLlamaForCausalLM,
+
         # Gemma
         GemmaAttention: QEffGemmaAttention,
         GemmaDecoderLayer: QEffGemmaDecoderLayer,
         GemmaModel: QEffGemmaModel,
         GemmaForCausalLM: QEffGemmaForCausalLM,
+
         # Gemma2
         Gemma2Attention: QEffGemma2Attention,
         Gemma2DecoderLayer: QEffGemma2DecoderLayer,
         Gemma2Model: QEffGemma2Model,
         Gemma2ForCausalLM: QEffGemma2ForCausalLM,
+
         # mllama
         MllamaForCausalLM: QEffMllamaForCausalLM,
         MllamaTextModel: QEffMllamaTextModel,
@@ -260,47 +276,63 @@ class KVCacheTransform(ModuleMappingTransform):
         MllamaTextCrossAttention: QEffMllamaTextCrossAttention,
         MllamaCrossAttentionDecoderLayer: QEffMllamaCrossAttentionDecoderLayer,
         MllamaSelfAttentionDecoderLayer: QEffMllamaSelfAttentionDecoderLayer,
+
         # Mistral
         MistralAttention: QEffMistralAttention,
         MistralDecoderLayer: QEffMistralDecoderLayer,
         MistralModel: QEffMistralModel,
         MistralForCausalLM: QEffMistralForCausalLM,
+
         # Mixtral
         MixtralAttention: QEffMixtralAttention,
         MixtralSparseMoeBlock: QEffMixtralSparseMoeBlock,
         MixtralDecoderLayer: QeffMixtralDecoderLayer,
         MixtralModel: QEffMixtralModel,
         MixtralForCausalLM: QEffMixtralForCausalLM,
+
         # Mpt
         MptAttention: QEffMptAttention,
         MptBlock: QEffMptBlock,
         MptModel: QEFfMptModel,
         MptForCausalLM: QEffMptForCausalLM,
+
         # Phi3
         Phi3Attention: QEffPhi3Attention,
         Phi3DecoderLayer: QEffPhi3DecoderLayer,
         Phi3Model: QEffPhi3Model,
         Phi3ForCausalLM: QEffPhi3ForCausalLM,
+
         # Phi
         PhiAttention: QEffPhiAttention,
         PhiDecoderLayer: QEffPhiDecoderLayer,
         PhiModel: QEffPhiModel,
         PhiForCausalLM: QEffPhiForCausalLM,
+
         # Qwen2
         Qwen2Attention: QEffQwen2Attention,
         Qwen2DecoderLayer: QEffQwen2DecoderLayer,
         Qwen2Model: QEffQwen2Model,
         Qwen2ForCausalLM: QEffQwen2ForCausalLM,
+
         # Starcoder2
         Starcoder2Attention: QEffStarcoder2Attention,
         Starcoder2DecoderLayer: QEFFStarcoder2DecoderLayer,
         Starcoder2Model: QEffStarcoder2Model,
         Starcoder2ForCausalLM: QEffStarcoder2ForCausalLM,
+
         # GptBigcode
         GPTBigCodeAttention: QEffGPTBigCodeAttention,
         GPTBigCodeBlock: QEffGPTBigCodeBlock,
         GPTBigCodeModel: QEffGPTBigCodeModel,
         GPTBigCodeForCausalLM: QEffGPTBigCodeForCausalLM,
+        
+        # Phi3-vision
+        "Phi3VModel":QEffPhi3VModel,
+        "Phi3Attention":QEffPhi3VAttention,
+        "Phi3RotaryEmbedding":QEffPhi3RotaryEmbedding,
+        "Phi3VForCausalLM":QEffPhi3VForCausalLM,
+        "Phi3ImageEmbedding":QEffPhi3ImageEmbedding,
+        "Phi3DecoderLayer":QEffPhi3VDecoderLayer,
     }
 
     @classmethod

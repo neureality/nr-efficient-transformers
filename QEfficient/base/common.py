@@ -50,10 +50,12 @@ def get_hf_model_type(hf_model_path: str) -> QEFF_MODEL_TYPE:
         raise FileNotFoundError(
             "Please pass local dir path where the model is downloaded; use `QEfficient.utils.login_and_download_hf_lm` for downloading hf model"
         )
-    config, kwargs = AutoConfig.from_pretrained(
-        hf_model_path,
-        return_unused_kwargs=True,
-    )
+    # config, kwargs = AutoConfig.from_pretrained(
+    #     hf_model_path,
+    #     return_unused_kwargs=True,
+    # )
+    config, kwargs = AutoConfig.from_pretrained(hf_model_path, return_unused_kwargs=True, trust_remote_code=True,_attn_implementation="eager")
+    breakpoint()
 
     if config.__class__ in MODEL_FOR_CAUSAL_LM_MAPPING:
         return QEFF_MODEL_TYPE.CAUSALLM
@@ -76,11 +78,12 @@ class QEFFCommonLoader:
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str, *args, **kwargs) -> QEFFBaseModel:
         """
-        Downloads HuggingFace model if already doesn't exist locally, returns QEFFAutoModel object based on type of model.
+        Downloads HuggingFace model if already doesn't exist locally, returns QEffAutoModel object based on type of model.
         """
         if not os.path.isdir(pretrained_model_name_or_path):
             pretrained_model_name_or_path = login_and_download_hf_lm(pretrained_model_name_or_path, *args, **kwargs)
-        model_type = get_hf_model_type(hf_model_path=pretrained_model_name_or_path)
+        #model_type = get_hf_model_type(hf_model_path=pretrained_model_name_or_path)
+        model_type = QEFF_MODEL_TYPE.CAUSALLM
         qeff_auto_model_class = MODEL_TYPE_TO_QEFF_AUTO_MODEL_MAP[model_type]
         if not issubclass(qeff_auto_model_class, QEFFBaseModel):
             raise Exception(f"Expected class that inherits {QEFFBaseModel}, got {type(qeff_auto_model_class)}")
