@@ -348,6 +348,7 @@ class QEffQwen2ForCausalLM(Qwen2ForCausalLM):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        use_inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -374,6 +375,10 @@ class QEffQwen2ForCausalLM(Qwen2ForCausalLM):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
+        #TODO You must specify input_ids and inputs_embeds!
+        mask_expanded = use_inputs_embeds.view(1,1,1)
+        inputs_embeds = torch.where(mask_expanded, inputs_embeds, self.model.embed_tokens(input_ids))
+        input_ids = None
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (

@@ -7,6 +7,7 @@
 
 import numpy as np
 import torch
+import os
 
 from QEfficient.utils import get_num_layers_from_config, get_padding_shape_from_config, padding_check_and_fix
 
@@ -44,36 +45,69 @@ class InputHandler:
         Return:
             :Dict: input_ids, position_ids, past_key_values
         """
+        # Use inputs_embeds instaed of input_ids
+        if os.environ.get("IS_INPUTS_EMBEDS_MODEL_ENVIRONMENT_VARIABLE", 'false').lower() == 'true':
+            inputs = self.tokenizer(
+                self.prompt,
+                return_tensors="pt",
+                padding=True,
+            )
+            inputs.pop("attention_mask")
+            inputs.pop("token_type_ids", None)
+            inputs.pop("input_ids")
+                        
+            # Load the embeddings from the file
+            emb_inputs = torch.load(
+                os.environ.get('EMBEDDING_PATH'), map_location=torch.device('cpu')).cpu().unsqueeze(0)
+            emb_inputs = emb_inputs.to(dtype=torch.float32)
+            batch_size, seq_len, hidden_size = emb_inputs.shape
+            position_ids = torch.arange(seq_len).view(1, -1)
+            inputs["position_ids"] = torch.concat(
+                [
+                    position_ids,
+                    torch.ones((batch_size, self.prompt_len -
+                               seq_len), dtype=torch.int64) * (-1),
+                ],
+                1,
+            )
+            inputs['inputs_embeds'] = emb_inputs
+            inputs['input_ids'] = torch.zeros(batch_size, seq_len, dtype=torch.long, device=emb_inputs.device)
+            # Flag to use inputs_embeds instead of input_ids
+            inputs['use_inputs_embeds'] = torch.BoolTensor([1])
 
-        inputs = self.tokenizer(
-            self.prompt,
-            return_tensors="pt",
-            padding=True,
-        )
-        input_ids = inputs["input_ids"]
-        batch_size, input_len = input_ids.shape
-        inputs.pop("attention_mask")
-        inputs.pop("token_type_ids", None)
-        position_ids = torch.arange(input_len).view(1, -1)
-        inputs["input_ids"] = torch.concat(
-            [
-                input_ids,
-                torch.ones((batch_size, self.prompt_len - input_len), dtype=torch.int64)
-                * (self.tokenizer.pad_token_id),
-            ],
-            1,
-        )
-        inputs["position_ids"] = torch.concat(
-            [
-                position_ids,
-                torch.ones((batch_size, self.prompt_len - input_len), dtype=torch.int64) * (-1),
-            ],
-            1,
-        )
+        else:
+            inputs = self.tokenizer(
+                self.prompt,
+                return_tensors="pt",
+                padding=True,
+            )
+            input_ids = inputs["input_ids"]
+            batch_size, seq_len = input_ids.shape
+            inputs.pop("attention_mask")
+            inputs.pop("token_type_ids", None)
+            position_ids = torch.arange(seq_len).view(1, -1)
+            inputs['use_inputs_embeds'] = torch.BoolTensor([0])
+            inputs["input_ids"] = torch.concat(
+                [
+                    input_ids,
+                    torch.ones((batch_size, self.prompt_len -
+                               seq_len), dtype=torch.int64)
+                    * (self.tokenizer.pad_token_id),
+                ],
+                1,
+            )
+            inputs["position_ids"] = torch.concat(
+                [
+                    position_ids,
+                    torch.ones((batch_size, self.prompt_len -
+                               seq_len), dtype=torch.int64) * (-1),
+                ],
+                1,
+            )
 
         if self.full_batch_size:
             inputs["input_ids"] = input_ids
-            inputs["position_ids"] = torch.arange(input_len).view(1, input_len)
+            inputs["position_ids"] = torch.arange(seq_len).view(1, seq_len)
             inputs["batch_index"] = torch.arange(1).view(-1, 1)
 
         past_key_values = []
@@ -86,7 +120,7 @@ class InputHandler:
 
         return inputs
 
-    def update_pytorch_inputs(self, inputs, pt_outputs):
+    def update_pytorch_inputs(self, inputs, pt_outputs, transformed_model):
         """
         Function responsible for updating Prefill stage inputs to create decode stage inputs for PyTorch model.
 
@@ -97,28 +131,43 @@ class InputHandler:
         Return:
             :Dict: Updated input_ids, position_ids and past_key_values
         """
+        is_inputs_embeds_model = os.environ.get("IS_INPUTS_EMBEDS_MODEL_ENVIRONMENT_VARIABLE").lower() == 'true'
         updated_inputs = {}
         if self.full_batch_size:
             batch_index = torch.arange(1).view(-1, 1)
 
             input_ids = pt_outputs.logits.detach().argmax(2)
-            updated_inputs["input_ids"] = torch.full((self.full_batch_size, 1), self.tokenizer.pad_token_id)
+            updated_inputs["input_ids"] = torch.full(
+                (self.full_batch_size, 1), self.tokenizer.pad_token_id)
             updated_inputs["input_ids"][batch_index.view(-1)] = input_ids
 
-            position_ids = inputs["position_ids"].max(1, keepdim=True).values + 1
-            updated_inputs["position_ids"] = torch.full((self.full_batch_size, 1), 0)
+            position_ids = inputs["position_ids"].max(
+                1, keepdim=True).values + 1
+            updated_inputs["position_ids"] = torch.full(
+                (self.full_batch_size, 1), 0)
             updated_inputs["position_ids"][batch_index.view(-1)] = position_ids
 
-            updated_inputs["batch_index"] = torch.arange(self.full_batch_size).view(-1, 1)
+            updated_inputs["batch_index"] = torch.arange(
+                self.full_batch_size).view(-1, 1)
 
         else:
-            updated_inputs["input_ids"] = pt_outputs["logits"].argmax(-1).reshape(-1, 1)
+            
+            if is_inputs_embeds_model:
+                # A dummy inputs_embeds -> in decode we use the input_ids instead of inputs_embeds
+                updated_inputs["inputs_embeds"] = torch.zeros(1, 1, int(os.environ.get("hidden_size")), dtype=torch.float32)
+                
+            updated_inputs["input_ids"] = pt_outputs["logits"].argmax(
+                -1).reshape(-1, 1)
+                
             updated_inputs["position_ids"] = inputs["position_ids"].max(1, keepdim=True).values + 1
 
         updated_inputs["past_key_values"] = tuple(
-            [(key.detach(), value.detach()) for key, value in pt_outputs["past_key_values"]]
+            [(key.detach(), value.detach())
+             for key, value in pt_outputs["past_key_values"]]
         )
 
+        # Set mask to use input_ids for decode phase
+        updated_inputs['use_inputs_embeds'] = torch.BoolTensor([0])
         return updated_inputs
 
     def prepare_ort_inputs(self):
@@ -140,17 +189,21 @@ class InputHandler:
         inputs.pop("token_type_ids", None)
         position_ids = np.arange(input_len).reshape(1, -1)
         inputs["input_ids"] = np.concatenate(
-            [input_ids, np.full((batch_size, self.prompt_len - input_len), self.tokenizer.pad_token_id)],
+            [input_ids, np.full(
+                (batch_size, self.prompt_len - input_len), self.tokenizer.pad_token_id)],
             axis=1,
         ).astype(np.int64)
         inputs["position_ids"] = np.concatenate(
-            [position_ids, np.full((batch_size, self.prompt_len - input_len), -1)],
+            [position_ids, np.full(
+                (batch_size, self.prompt_len - input_len), -1)],
             axis=1,
         ).astype(np.int64)
 
         for i in range(self.n_layer):
-            inputs["past_key." + str(i)] = np.zeros((self.padding_shape), dtype=np.float32)
-            inputs["past_value." + str(i)] = np.zeros((self.padding_shape), dtype=np.float32)
+            inputs["past_key." +
+                   str(i)] = np.zeros((self.padding_shape), dtype=np.float32)
+            inputs["past_value." +
+                   str(i)] = np.zeros((self.padding_shape), dtype=np.float32)
 
         return inputs
 
@@ -168,10 +221,13 @@ class InputHandler:
 
         updated_inputs = {}
         updated_inputs["input_ids"] = ort_outputs["logits"].argmax(-1)
-        updated_inputs["position_ids"] = np.max(inputs["position_ids"], axis=1, keepdims=True) + 1
+        updated_inputs["position_ids"] = np.max(
+            inputs["position_ids"], axis=1, keepdims=True) + 1
         for i in range(self.n_layer):
-            updated_inputs["past_key." + str(i)] = ort_outputs["past_key_values"][i * 2]
-            updated_inputs["past_value." + str(i)] = ort_outputs["past_key_values"][i * 2 + 1]
+            updated_inputs["past_key." +
+                           str(i)] = ort_outputs["past_key_values"][i * 2]
+            updated_inputs["past_value." +
+                           str(i)] = ort_outputs["past_key_values"][i * 2 + 1]
 
         return updated_inputs
 
@@ -189,9 +245,11 @@ class InputHandler:
         present_key_values = []
         for i in range(self.n_layer):
             if "past_key." + str(i) + "_RetainedState" in ort_outputs:
-                present_key_values.append(ort_outputs["past_key." + str(i) + "_RetainedState"])
+                present_key_values.append(
+                    ort_outputs["past_key." + str(i) + "_RetainedState"])
             if "past_value." + str(i) + "_RetainedState" in ort_outputs:
-                present_key_values.append(ort_outputs["past_value." + str(i) + "_RetainedState"])
+                present_key_values.append(
+                    ort_outputs["past_value." + str(i) + "_RetainedState"])
 
         outputs = {}
         outputs["past_key_values"] = present_key_values

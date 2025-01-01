@@ -11,6 +11,7 @@ from collections import deque
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Dict, List, Optional, Tuple, Union
+import torch
 
 import numpy as np
 import transformers
@@ -218,6 +219,7 @@ def cloud_ai_100_exec_kv(
     write_io_dir: Optional[str] = None,
     automation=False,
     full_batch_size: Optional[int] = None,
+    inputs_embeds: torch.Tensor = None,
 ):
     """
     This method generates output until ``eos`` or ``generation_len`` by executing the compiled ``qpc`` on ``Cloud AI 100`` Hardware cards.
@@ -254,6 +256,7 @@ def cloud_ai_100_exec_kv(
     batch_size, ctx_len = get_compilation_dims(qpc_path)
     prompt: List[str] = get_input_prompts(prompt, prompts_txt_file_path)
     prompt = fix_prompts(prompt, batch_size, full_batch_size)
+    is_inputs_embeds = inputs_embeds is not None
     generate_text = TextGeneration(
         tokenizer=tokenizer,
         prompt=prompt,
@@ -265,10 +268,12 @@ def cloud_ai_100_exec_kv(
         stream=stream,
         write_io_dir=write_io_dir,
         full_batch_size=full_batch_size,
+        is_inputs_embeds=is_inputs_embeds,
     )
     if full_batch_size is None:
         exec_info = [
-            generate_text.cloud_ai_100_exec_kv_helper(prompt[i : i + batch_size], generation_len)
+            #TODO: Temp solution for input_embeds
+            generate_text.cloud_ai_100_exec_kv_helper(prompt[i : i + batch_size], generation_len, inputs_embeds=inputs_embeds)
             for i in range(0, len(prompt), batch_size)
         ]
         prefill_time = np.average([info.prefill_time for info in exec_info])
@@ -288,7 +293,10 @@ def cloud_ai_100_exec_kv(
             total_time=total_time,
         )
     else:
-        exec_info = generate_text.cloud_ai_100_exec_kv_helper(prompt=prompt, generation_len=generation_len)
+        if is_inputs_embeds:
+            exec_info = generate_text.cloud_ai_100_exec_kv_helper(prompt, generation_len, inputs_embeds=inputs_embeds)
+        else:
+            exec_info = generate_text.cloud_ai_100_exec_kv_helper(prompt=prompt, generation_len=generation_len)
 
     print_latency_stats_kv(prompt, exec_info=exec_info, automation=automation)
     return exec_info
@@ -307,6 +315,7 @@ class TextGeneration:
         enable_debug_logs: bool = False,
         stream: bool = True,
         write_io_dir: Optional[str] = None,
+        is_inputs_embeds: bool = False,
     ) -> None:
         self.tokenizer = tokenizer
         self.prompt = prompt
@@ -316,7 +325,7 @@ class TextGeneration:
         self.generation_len = generation_len
         self.enable_debug_logs = enable_debug_logs
         self.stream = stream
-
+        self.is_inputs_embeds = is_inputs_embeds
         self.write_io_dir = write_io_dir
 
         # Load QPC
@@ -325,7 +334,7 @@ class TextGeneration:
 
         # Fetch the variables from the QPC
         self.vocab_size = self._fetch_vocab_size()  # Fetch Vocab size
-        self.batch_size, self.prefill_seq_len = self._fetch_batch_size_prefill_seq_len()
+        self.batch_size, self.prefill_seq_len = self._fetch_batch_size_prefill_seq_len(is_inputs_embeds)
         self.full_batch_size = (
             full_batch_size if full_batch_size else self._fetch_full_batch_size()
         )  # Check and fetch full batch size if CB is enabled
@@ -383,6 +392,7 @@ class TextGeneration:
 
     def _fetch_batch_size_prefill_seq_len(
         self,
+        is_inputs_embeds: bool = False,
     ):
         """
         Fetches the batch size and prefill sequence length from the session's bindings or allowed shapes.
@@ -391,15 +401,18 @@ class TextGeneration:
             batch_size: The batch size fetched from the session's bindings or allowed shapes.
             prefill_seq_len: The prefill sequence length fetched from the session's bindings or allowed shapes.
         """
+        input_name = "inputs_embeds" if is_inputs_embeds else "input_ids"
+        print(f"✨✨✨✨ {__name__} ✨✨✨✨ input_name: {input_name}")
+              
         if self.session.allowed_shapes:
             batch_size = max(
-                [x[self.session.binding_index_map["input_ids"]][1][0] for x in self.session.allowed_shapes]
+                [x[self.session.binding_index_map[input_name]][1][0] for x in self.session.allowed_shapes]
             )
             prefill_seq_len = max(
-                [x[self.session.binding_index_map["input_ids"]][1][1] for x in self.session.allowed_shapes]
+                [x[self.session.binding_index_map[input_name]][1][1] for x in self.session.allowed_shapes]
             )
         else:
-            batch_size, prefill_seq_len = self.session.bindings[self.session.binding_index_map["input_ids"]].dims
+            batch_size, prefill_seq_len = self.session.bindings[self.session.binding_index_map[input_name]].dims
         return batch_size, prefill_seq_len
 
     def _fetch_vocab_size(
@@ -444,7 +457,10 @@ class TextGeneration:
         """
         decode_inputs = {}
         decode_inputs["input_ids"] = self.decode_input_ids
+        self.dummy_inputs_embeds = self.dummy_inputs_embeds[:,:1,:]
+        decode_inputs["inputs_embeds"] = self.dummy_inputs_embeds
         decode_inputs["position_ids"] = self.decode_pos_ids
+        decode_inputs['use_inputs_embeds'] = np.array([0], dtype=np.int8) # Set input_ids flag
         if self.batch_index is not None:
             decode_inputs["batch_index"] = self.batch_index
 
@@ -476,7 +492,7 @@ class TextGeneration:
         self.generation_len[decode_batch_id or slice(None)] = generation_len
         return next_token_id
 
-    def run_prefill_for_all_inputs(self, prompt_queue, generation_len):
+    def run_prefill_for_all_inputs(self, prompt_queue, generation_len, input_embeds: Optional[torch.Tensor] = None):
         """
         Runs prefill for all inputs in the prompt queue and updates the decode input.
 
@@ -492,12 +508,12 @@ class TextGeneration:
 
             # run prefill for num_chunks
             outputs, position_ids, generation_len = self.run_prefill(
-                next_prompt, generation_len, decode_batch_id=np.array(decode_batch_id, dtype=np.int64).reshape(1, 1)
+                next_prompt, generation_len, decode_batch_id=np.array(decode_batch_id, dtype=np.int64).reshape(1, 1), input_embeds=input_embeds
             )
 
             _ = self._update_decode_input(outputs, position_ids, generation_len, decode_batch_id)
 
-    def run_prefill(self, prompt, generation_len, prefill_logit_bs=1, decode_batch_id=None):
+    def run_prefill(self, prompt, generation_len, prefill_logit_bs=1, decode_batch_id=None, inputs_embeds: Optional[torch.Tensor] = None):
         """
         Runs prefill for a given prompt and generation length.
 
@@ -514,10 +530,20 @@ class TextGeneration:
             position_ids (array): The position IDs.
             generation_len (int): The generation length.
         """
+        f_dim = 3584 #TODO: Temp solution for input_embeds for Qwen2-7B
+        
         # Run prefill
-        inputs = self.tokenizer(prompt, return_tensors="np", padding=True)
+        if inputs_embeds is not None:
+            input_name = "inputs_embeds"
+            inputs = {"inputs_embeds": inputs_embeds,
+                      'attention_mask': np.ones(inputs_embeds.shape[:2], dtype=np.int64)
+                      }
+        else:
+            input_name = "input_ids"
+            inputs = self.tokenizer(prompt, return_tensors="np", padding=True)
+            
         position_ids = inputs["attention_mask"].sum(1, keepdims=True)
-        padded_len = inputs["input_ids"].shape[1]
+        padded_len = inputs[input_name].shape[1]
         num_chunks = -(padded_len // -self.prefill_seq_len)  # ceil divide without float
         padded_len = num_chunks * self.prefill_seq_len  # Convert to a multiple of prompt_len
 
@@ -529,8 +555,27 @@ class TextGeneration:
         logits_out_placeholder = np.zeros((prefill_logit_bs, 1, self.vocab_size), dtype=np.float32)
         self.session.set_buffers({"logits": logits_out_placeholder})
 
-        inputs = self.tokenizer(prompt, return_tensors="np", padding="max_length", max_length=padded_len)
-        inputs["position_ids"] = np.where(inputs.pop("attention_mask"), np.arange(padded_len), -1)
+        if inputs_embeds is not None:
+            import torch.nn.functional as F
+            
+            batch_size, seq_len, f_dim = inputs[input_name].shape
+            pad_size = padded_len - seq_len
+            self.dummy_inputs_embeds = np.zeros((batch_size, 1, f_dim), dtype=np.float32)
+            random_padding = torch.randn(batch_size, pad_size, f_dim, device=inputs[input_name].device, dtype=inputs[input_name].dtype)
+            inputs[input_name] = torch.cat((inputs[input_name], random_padding), dim=1)
+            inputs["attention_mask"] = F.pad(torch.tensor(inputs["attention_mask"]), (0, pad_size), value=-1)
+            inputs["position_ids"] = np.where(inputs.pop("attention_mask") > 0, np.arange(padded_len), -1)
+            inputs['inputs_embeds'] = inputs['inputs_embeds'].numpy()
+            inputs['use_inputs_embeds'] = np.array([1], dtype=np.int8) # Set input_embeds flag
+            # Create a dummy input_ids tensor of size [bs, seq_len]
+            inputs['input_ids'] = np.zeros((batch_size, padded_len), dtype=np.int64)
+        else:
+            inputs = self.tokenizer(prompt, return_tensors="np", padding="max_length", max_length=padded_len)
+            self.dummy_inputs_embeds = np.zeros((prefill_logit_bs, self.prefill_seq_len, f_dim), dtype=np.float32)
+            inputs['inputs_embeds'] = self.dummy_inputs_embeds
+            inputs["position_ids"] = np.where(inputs.pop("attention_mask"), np.arange(padded_len), -1)
+            inputs['use_inputs_embeds'] = np.array([0], dtype=np.int8) # Set input_embeds flag
+            
         inputs.pop("token_type_ids", None)
 
         if decode_batch_id is not None:
@@ -538,10 +583,14 @@ class TextGeneration:
 
         for i in range(num_chunks):
             chunk_inputs = inputs.copy()
-            chunk_inputs["input_ids"] = inputs["input_ids"][
+            if inputs_embeds is not None:
+                chunk_inputs['inputs_embeds'] = inputs['inputs_embeds'][
+                    :, i * self.prefill_seq_len : (i + 1) * self.prefill_seq_len
+                ]
+            chunk_inputs["position_ids"] = inputs["position_ids"][
                 :, i * self.prefill_seq_len : (i + 1) * self.prefill_seq_len
             ]
-            chunk_inputs["position_ids"] = inputs["position_ids"][
+            chunk_inputs["input_ids"] = inputs["input_ids"][
                 :, i * self.prefill_seq_len : (i + 1) * self.prefill_seq_len
             ]
             outputs = self.session.run(chunk_inputs)
@@ -553,7 +602,7 @@ class TextGeneration:
             generation_len,
         )
 
-    def run_continuous_batching_decode(self, prompt_queue, generation_len):
+    def run_continuous_batching_decode(self, prompt_queue, generation_len, input_embeds: Optional[torch.Tensor] = None):
         """
         Runs continuous batching decode for the given prompt queue and generation length.
 
@@ -616,6 +665,8 @@ class TextGeneration:
                         current_decode_ongoing[decode_batch_id] = False
                 else:
                     # If the generated sequence is valid and within generation len prepare for next decode
+                    decode_inputs['use_inputs_embeds'] = np.array([0], dtype=np.int8) # Set input_ids flag
+                    decode_inputs['inputs_embeds'] = self.dummy_inputs_embeds # Set dummy inputs_embeds
                     decode_inputs["input_ids"][decode_batch_id] = next_token_id[decode_batch_id]
                     decode_inputs["position_ids"][decode_batch_id] += 1
                     self.generated_ids[batch_id_map[decode_batch_id], generated_id_current_index[decode_batch_id]] = (
@@ -659,7 +710,7 @@ class TextGeneration:
                 break
         return num_token
 
-    def regular_model_execution(self, prompt, generation_len):
+    def regular_model_execution(self, prompt, generation_len, inputs_embeds):
         """
         Executes the model in regular mode.
         This method runs the prefill, prepares the decode inputs, and then runs the decode. The generated texts are decoded and optionally streamed. Latency metrics are calculated and returned.
@@ -673,7 +724,7 @@ class TextGeneration:
         """
         start = perf_counter()
         outputs, position_ids, generation_len = self.run_prefill(
-            prompt, generation_len, prefill_logit_bs=self.batch_size
+            prompt, generation_len, prefill_logit_bs=self.batch_size, inputs_embeds=inputs_embeds
         )
         self._update_decode_input(outputs, position_ids, generation_len)
 
@@ -691,7 +742,7 @@ class TextGeneration:
         )
         return prefill_time, decode_perf, total_perf, total_time, generated_texts
 
-    def continuous_batching_execution(self, prompt, prompt_queue, generation_len):
+    def continuous_batching_execution(self, prompt, prompt_queue, generation_len, input_embeds: Optional[torch.Tensor] = None):
         """
         Executes the model using continuous batching.
         This method handles the execution of the model when continuous batching is enabled. It runs the prefill step for all inputs, performs continuous batching decode, and then decodes the generated texts. The texts are optionally streamed. Latency metrics are calculated and returned.
@@ -705,7 +756,7 @@ class TextGeneration:
         """
         self.batch_index = np.arange(self.full_batch_size).reshape(-1, 1)
         start = perf_counter()
-        self.run_prefill_for_all_inputs(prompt_queue, generation_len)
+        self.run_prefill_for_all_inputs(prompt_queue, generation_len, input_embeds)
 
         loop_start = perf_counter()  # Start decode loop timer
         decode_pause_time = self.run_continuous_batching_decode(prompt_queue, generation_len)
@@ -722,7 +773,9 @@ class TextGeneration:
         prefill_time /= len(prompt)  # Average prefill time for continuous batching
         return prefill_time, decode_perf, total_perf, total_time, generated_texts
 
-    def cloud_ai_100_exec_kv_helper(self, prompt: List[str], generation_len: Optional[int] = None):
+    def cloud_ai_100_exec_kv_helper(self, prompt: List[str],
+                                    generation_len: Optional[int] = None,
+                                    inputs_embeds: Optional[torch.Tensor] = None):
         """
         Executes the model for a given list of prompts and a specified generation length.
 
@@ -756,13 +809,13 @@ class TextGeneration:
         if self.full_batch_size is not None:
             logger.warning("Streamer is currently unavailable for continuous batch execution.")
             prefill_time, decode_perf, total_perf, total_time, generated_texts = self.continuous_batching_execution(
-                prompt, prompt_queue, generation_len
+                prompt, prompt_queue, generation_len, inputs_embeds
             )
         else:
             if self.stream:
                 self.streamer.on_finalized_text("\nPrompt : " + prompt[0] + "\nCompletion :")
             prefill_time, decode_perf, total_perf, total_time, generated_texts = self.regular_model_execution(
-                prompt, generation_len
+                prompt, generation_len, inputs_embeds
             )
 
         if self.stream:

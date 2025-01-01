@@ -89,21 +89,60 @@ def export_onnx(
 
     os.makedirs(f"{gen_models_path}_tmp", exist_ok=True)
     try:
-        info("Exporting to ONNX...")
-        torch.onnx.export(
-            pt_model,
-            tuple(pt_inputs),
-            f"{gen_models_path}_tmp/{model_base_name}.onnx",
-            input_names=input_names,
-            output_names=output_names,
-            dynamic_axes=dynamic_axes,
-            opset_version=13,
-            custom_opsets={"com.qti.aisw.onnx": 1},
-        )
+        if os.environ.get("IS_INPUTS_EMBEDS_MODEL_ENVIRONMENT_VARIABLE").lower() != "true":
+            info("Exporting to ONNX...")
+            torch.onnx.export(
+                pt_model,
+                tuple(pt_inputs),
+                f"{gen_models_path}_tmp/{model_base_name}.onnx",
+                input_names=input_names,
+                output_names=output_names,
+                dynamic_axes=dynamic_axes,
+                opset_version=13,
+                custom_opsets={"com.qti.aisw.onnx": 1},
+            )
+
+        else:
+            """
+            ====================================
+            ✨✨✨✨TEST SECTION:✨✨✨✨✨
+            ====================================
+            """
+            info("[✨✨✨✨] Exporting to ONNX...")
+            # emb_inputs = torch.load(os.environ.get('EMBEDDING_PATH'), map_location=torch.device('cpu')).cpu()
+            # emb_inputs = emb_inputs.to(dtype=torch.float32)
+            # emb_inputs = emb_inputs[0][None, None, ...] # Take one embedded token
+            inputs = {
+                "input_ids": pt_inputs[0],
+                "inputs_embeds": torch.zeros(1, 1, int(os.environ.get("hidden_size")), dtype=torch.float32),
+                "position_ids": pt_inputs[2],
+                "past_key_values": pt_inputs[3],
+                "use_inputs_embeds": torch.BoolTensor([0])
+                }
+            dynamic_axes['inputs_embeds'] = {0: "batch_size", 1: "seq_len"}
+            torch.onnx.export(
+                pt_model,
+                inputs,
+                f"{gen_models_path}_tmp/{model_base_name}.onnx",
+                input_names=input_names,
+                output_names=output_names,
+                dynamic_axes=dynamic_axes,
+                opset_version=13,
+                custom_opsets={"com.qti.aisw.onnx": 1},
+                verbose=True,
+                export_params=True,
+                # do_constant_folding=False,
+            )
+            """
+            ====================================
+            ✨✨✨✨TEST SECTION:✨✨ ✨✨✨
+            ====================================
+            """
     except Exception as e:
         raise RuntimeError("Exporting to ONNX failed. {}".format(e))
 
     onnx.checker.check_model(f"{gen_models_path}_tmp/{model_base_name}.onnx")
+    print(f"Initial Model Export Completed, Saved at: {gen_models_path}_tmp/{model_base_name}.onnx")
     loaded_model = onnx.load(f"{gen_models_path}_tmp/{model_base_name}.onnx")
     shutil.rmtree(f"{gen_models_path}_tmp")
     os.makedirs(f"{gen_models_path}", exist_ok=True)
@@ -129,9 +168,9 @@ def export_onnx(
     onnx.shape_inference.infer_shapes_path(
         os.path.join(gen_models_path, f"{model_base_name}.onnx"),
         os.path.join(gen_models_path, f"{model_base_name}.onnx"),
-        True,
-        True,
-        True,
+        True, # Check type
+        True,  # Strict mode
+        True,  # Data propagation
     )
 
     info(f"input names {input_names}")

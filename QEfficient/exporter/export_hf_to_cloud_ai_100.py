@@ -203,18 +203,35 @@ def export_kvstyle_transformed_model_to_onnx(
     if seq_len <= 0:
         raise ValueError(f"Need seq_len to be greater than zero, got seq_len={seq_len}")
 
+    # ! Oded - Maybe use this to create the onnx with the right past_key_values
     # Preprocess inputs
     # Build inputs for prefill
+    input_len = 0
+    is_inputs_embeds_model = True if os.environ.get("IS_INPUTS_EMBEDS_MODEL_ENVIRONMENT_VARIABLE", 'false').lower() == "true" else False
+    
     input_handler = InputHandler(
         batch_size=len(Constants.INPUT_STR),
         tokenizer=tokenizer,
         config=transformed_model.config,
-        prompt=Constants.INPUT_STR,
+        prompt=['My name is'],
         prompt_len=Constants.PROMPT_LEN,
         ctx_len=seq_len,
         full_batch_size=full_batch_size,
     )
 
+    if is_inputs_embeds_model:
+        input_len = torch.load(os.environ.get('EMBEDDING_PATH'), map_location=torch.device('cpu')).shape[0]
+        input_handler1 = InputHandler(
+            batch_size=1,
+            tokenizer=tokenizer,
+            config=transformed_model.config,
+            prompt=['my ' * (input_len)],
+            prompt_len=(input_len),
+            ctx_len=4096,
+            full_batch_size=full_batch_size,
+        )
+        input_handler = input_handler1
+        
     inputs = input_handler.prepare_pytorch_inputs()
     pt_outputs = transformed_model(**inputs)
     output_names = list(pt_outputs.keys())
@@ -225,9 +242,12 @@ def export_kvstyle_transformed_model_to_onnx(
 
     # Build inputs for next iteration from outputs
     # Build inputs for decode
-    inputs = input_handler.update_pytorch_inputs(inputs, pt_outputs)
+    inputs = input_handler.update_pytorch_inputs(inputs, pt_outputs, transformed_model)
     # To avoid issues in onnx export
-    inputs["position_ids"] = torch.full((full_batch_size if full_batch_size else 1, 1), seq_len - 1)
+    if is_inputs_embeds_model:
+        inputs["position_ids"] = torch.full((full_batch_size if full_batch_size else 1, 1), (4096) - 1)
+    else:
+        inputs["position_ids"] = torch.full((full_batch_size if full_batch_size else 1, 1), seq_len - 1)
 
     # Run PyTorch inference with past
     pt_outputs = transformed_model(**inputs)
