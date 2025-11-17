@@ -387,3 +387,242 @@ class QEffLlamaForCausalLM(LlamaForCausalLM):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+
+'''
+NR implementation for intra-node PP 
+'''
+from dataclasses import dataclass
+from transformers.modeling_outputs import ModelOutput
+
+@dataclass
+class PipelineStageOutput(ModelOutput):
+    hidden_states: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+
+class QEffLlamaPipelineStage(LlamaModel):
+    """
+    A pipeline stage that processes a subset of transformer layers
+    """
+    def __qeff_init__(self):
+        self.nr_pp_config = self.config.to_dict()["nr_pp_config"] 
+        self.stage_start_idx = self.nr_pp_config["stage_start_idx"]
+        self.stage_end_idx = self.nr_pp_config["stage_end_idx"]
+        self.is_first_stage = self.stage_start_idx == 0
+        self.is_last_stage = self.stage_end_idx == self.config.num_hidden_layers
+        self.stage_idx = int(self.stage_start_idx  / (self.stage_end_idx - self.stage_start_idx))
+
+        stage_layers = nn.ModuleList()
+        for local_idx, global_idx in enumerate(range(self.stage_start_idx, self.stage_end_idx)):
+            layer = self.layers[global_idx]  # same module object, same weights
+
+            # adjust layer index - since we don't provide the entire KV cache, just the subset for this stage (M transformer layers) 
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "layer_idx"):
+                layer.self_attn.layer_idx = local_idx  # 0..M-1 inside this stage
+
+            stage_layers.append(layer)
+
+        self.layers = stage_layers
+        self.num_layers_in_stage = len(self.layers)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        hidden_states: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        batch_index: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> Union[Tuple, BaseModelOutputWithPast]:
+        
+        # Handle default values
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        
+        # Handle first stage logic
+        if self.is_first_stage:
+            if (input_ids is None) ^ (hidden_states is not None):
+                raise ValueError("You must specify exactly one of input_ids or hidden_states for first stage")
+            
+            if hidden_states is None:
+                hidden_states = self.embed_tokens(input_ids)
+                
+            return_legacy_cache = False
+            if use_cache and not isinstance(past_key_values, Cache):
+                return_legacy_cache = True
+                past_key_values = QEffDynamicCache.from_legacy_cache(past_key_values)
+
+            if cache_position is None:
+                past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + hidden_states.shape[1], device=hidden_states.device
+                )
+            if position_ids is None:
+                position_ids = cache_position.unsqueeze(0)
+                
+        else:
+            # For intermediate/last stages, hidden_states should contain the intermediate states
+            if hidden_states is None:
+                raise ValueError("For non-first pipeline stages, hidden_states (intermediate states) must be provided")
+            
+            # Handle legacy cache conversion if needed for non-first stages too
+            return_legacy_cache = False
+            if use_cache and past_key_values is not None and not isinstance(past_key_values, Cache):
+                return_legacy_cache = True
+                past_key_values = QEffDynamicCache.from_legacy_cache(past_key_values)
+
+            # For non-first stages, position_ids should be provided
+            if position_ids is None:
+                raise ValueError("For non-first pipeline stages, position_ids must be provided")
+                
+            # Calculate cache_position if not provided
+            if cache_position is None:
+                past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + hidden_states.shape[1], device=hidden_states.device
+                )
+
+        # Create causal mask - IMPORTANT: This is needed for ALL stages
+        # The attention mask propagates to every transformer layer
+        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+        causal_mask = _create_causal_mask(position_ids=position_ids, target_length=past_seen_tokens)
+
+        # Process through this stage's layers
+        all_hidden_states = () if output_hidden_states else None
+        all_self_attns = () if output_attentions else None
+
+        for i, decoder_layer in enumerate(self.layers):
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
+
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_values,
+                batch_index=batch_index,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                **kwargs,
+            )
+
+            hidden_states = layer_outputs[0]
+
+            if output_attentions:
+                all_self_attns += (layer_outputs[1],)
+
+        # Apply final norm only for last stage
+        if self.is_last_stage:
+            hidden_states = self.norm(hidden_states)
+            
+        # Add hidden states from the last decoder layer
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        if use_cache and return_legacy_cache:
+            past_key_values = past_key_values.to_legacy_cache()
+
+        output = BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=past_key_values if use_cache else None,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns,
+        )
+        return output if return_dict else output.to_tuple()
+
+class QEffLlamaPipelineForCausalLM(LlamaForCausalLM):
+    """
+    Pipeline-aware wrapper for CausalLM that can handle different stages
+    """
+
+    def __qeff_init__(self):
+        self.nr_pp_config = self.config.to_dict()["nr_pp_config"] 
+        self.stage_start_idx = self.nr_pp_config["stage_start_idx"]
+        self.stage_end_idx = self.nr_pp_config["stage_end_idx"]
+        self.is_first_stage = self.stage_start_idx == 0
+        self.is_last_stage = self.stage_end_idx == self.config.num_hidden_layers
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
+        batch_index: Optional[torch.LongTensor] = None,
+        hidden_states: Optional[torch.FloatTensor] = None,  # For intermediate stages
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
+        **kwargs,
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+        
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # Forward through pipeline stage
+        outputs = self.model(
+            input_ids=input_ids,
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            batch_index=batch_index,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+            cache_position=cache_position,
+            **kwargs,
+        )
+        
+        stage_hidden_states = outputs.last_hidden_state
+
+        if self.is_last_stage:
+            # Extract position for logits computation
+            logit_index = position_ids.to(torch.int32).argmax(1, keepdim=True)
+            hidden_states_for_logits = stage_hidden_states[torch.arange(position_ids.shape[0]).view(-1, 1), logit_index]
+            
+            logits = self.lm_head(hidden_states_for_logits)
+            logits = logits.float()
+            
+            return CausalLMOutputWithPast(
+                loss=None,
+                logits=logits,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+            )
+        else:
+            # Return intermediate states for pipeline stages
+            # return CausalLMOutputWithPast(
+            #     loss=None,
+            #     logits=None,  
+            #     past_key_values=outputs.past_key_values,
+            #     hidden_states=stage_hidden_states,
+            #     attentions=outputs.attentions,
+            # )
+            # TODO: onnex exporter binds by position and not by name - so above dataclass is problematic due to
+            # onnx exporter assings the PKV[0] as hidden_states (because it's the first NON none tensor).
+            # therefore, i created a specific class for non last pipeline stage output.
+            return PipelineStageOutput(
+                hidden_states=stage_hidden_states,
+                past_key_values=outputs.past_key_values,
+            )

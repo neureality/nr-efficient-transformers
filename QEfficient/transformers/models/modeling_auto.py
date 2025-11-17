@@ -40,6 +40,7 @@ from QEfficient.transformers.models.pytorch_transforms import (
     CustomOpsTransform,
     KVCacheExternalModuleMapperTransform,
     KVCacheTransform,
+    NRKVCacheTransform,
     PoolingTransform,
     SamplerTransform,
     SpDTransform,
@@ -1409,10 +1410,17 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
                 "Please use `from_pretrained` method to load quantized models, might give unexpected results"
             )
 
+        # nr pp config
+        model.config.update({"nr_pp_config": kwargs["nr_pp_config"]})
+        if kwargs["nr_pp_config"]:
+            self.nr_pp_config = kwargs["nr_pp_config"]
+            self.num_layers = self.nr_pp_config["stage_end_idx"] - self.nr_pp_config["stage_start_idx"]
+        else:
+            self.num_layers = model.config.num_hidden_layers
+
         super().__init__(model)
         # Set use_cache=True to get KV values as output during ONNX export
         self.model.config.use_cache = True
-        self.num_layers = model.config.num_hidden_layers
         self.continuous_batching = continuous_batching
         self.model.qaic_config = qaic_config
         self.pretrained_model_name_or_path = kwargs.get("pretrained_model_name_or_path", None)
@@ -1499,6 +1507,12 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         kv_offload = kwargs.pop("kv_offload", None)
 
         kwargs.update({"attn_implementation": "eager", "low_cpu_mem_usage": False})
+
+        nr_pp_config = kwargs.pop("nr_pp_config", None)
+        if nr_pp_config:
+            cls._pytorch_transforms[4] = NRKVCacheTransform
+            print("Using NRKVCacheTransform for pipeline parallelism")
+            
         model = cls._hf_auto_class.from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
         if qaic_config is not None:
             qaic_config["pretrained_model_name_or_path"] = pretrained_model_name_or_path
@@ -1514,6 +1528,7 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
             continuous_batching=continuous_batching,
             qaic_config=qaic_config,
             pretrained_model_name_or_path=pretrained_model_name_or_path,
+            nr_pp_config=nr_pp_config,
             **kwargs,
         )
 
@@ -1547,6 +1562,9 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         bs: int = constants.ONNX_EXPORT_EXAMPLE_BATCH_SIZE
         seq_len: int = constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN
         fbs: int = constants.ONNX_EXPORT_EXAMPLE_FBS
+
+        hidden_size = self.model.config.hidden_size
+
         kv_cache_shape = get_padding_shape_from_config(
             self.model.config, fbs if self.continuous_batching else bs, seq_len
         )
@@ -1555,10 +1573,17 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
             "position_ids": torch.arange(seq_len, dtype=torch.int64).view(1, seq_len).repeat(bs, 1),
             "past_key_values": [[] for _ in range(self.num_layers)],
         }
+                
         dynamic_axes = {
             "input_ids": {0: "batch_size", 1: "seq_len"},
-            "position_ids": {0: "batch_size", 1: "seq_len"},
+            "position_ids": {0: "batch_size", 1: "seq_len"}
         }
+
+        if hasattr(self, "nr_pp_config"):
+            if self.nr_pp_config["stage_start_idx"] > 0:
+                example_inputs["hidden_states"] = torch.zeros((bs, seq_len, hidden_size), dtype=torch.float32)
+                dynamic_axes["hidden_states"] =  {0: "batch_size", 1: "seq_len"}
+
         if len(kv_cache_shape) == 3:  # For GPTBigCode arch the pkv is 3d
             pkv_dynamic_axes = {
                 0: "full_batch_size" if self.continuous_batching else "batch_size",
@@ -1575,7 +1600,10 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
                 output_names.append("probs")
             output_names.append("next_tokens")
         else:
-            output_names.append("logits")
+            if hasattr(self, "nr_pp_config") and self.nr_pp_config["stage_end_idx"] < self.model.config.num_hidden_layers:
+                output_names.append("hidden_states")
+            else:
+                output_names.append("logits")
 
         # TODO Update the get_padding_shape_from_config method to handle the case when the model config has attention_chunk_size or sliding_window and it should return a list of shapes for each layer
         if (

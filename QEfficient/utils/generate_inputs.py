@@ -162,6 +162,11 @@ class InputHandler:
             axis=1,
         ).astype(np.int64)
 
+        if self.full_batch_size:
+            inputs["input_ids"] = input_ids
+            inputs["position_ids"] = torch.arange(input_len).view(1, input_len).numpy()
+            inputs["batch_index"] = torch.arange(1).view(-1, 1).numpy()
+
         if hasattr(self.config, "model_type") and self.config.model_type in DYNAMIC_SEQ_LEN_SUPPORTED_MODEL_ARCH:
             for i in range(self.n_layer):
                 cache_shape = self.global_shape if not self.is_chunked_attention[i] else self.sliding_shape

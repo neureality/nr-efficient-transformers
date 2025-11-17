@@ -236,6 +236,8 @@ from QEfficient.transformers.models.llama.modeling_llama import (
     QEffLlamaDecoderLayer,
     QEffLlamaForCausalLM,
     QEffLlamaModel,
+    QEffLlamaPipelineForCausalLM,
+    QEffLlamaPipelineStage
 )
 from QEfficient.transformers.models.llama4.modeling_llama4 import (
     QEffLlama4ForCausalLM,
@@ -324,7 +326,6 @@ from QEfficient.transformers.spd.spd_transform_forward import tlm_forward
 
 SPD_TARGET = "target"
 
-
 class CustomOpsTransform(ModuleMappingTransform):
     _module_mapping = {
         GemmaRMSNorm: GemmaCustomRMSNormAIC,
@@ -369,6 +370,141 @@ class KVCacheTransform(ModuleMappingTransform):
         LlamaDecoderLayer: QEffLlamaDecoderLayer,
         LlamaModel: QEffLlamaModel,
         LlamaForCausalLM: QEffLlamaForCausalLM,
+        # Llama4
+        Llama4TextAttention: QEffLlama4TextAttention,
+        Llama4ForCausalLM: QEffLlama4ForCausalLM,
+        Llama4TextDecoderLayer: QEffLlama4TextDecoderLayer,
+        Llama4TextModel: QEffLlama4TextModel,
+        Llama4TextMoe: QEffLlama4TextMoe,
+        Llama4ForConditionalGeneration: QEffLlama4ForConditionalGeneration,
+        Llama4VisionAttention: QEffLlama4VisionAttention,
+        Llama4VisionModel: QEffLlama4VisionModel,
+        Llama4TextExperts: QEffLlama4TextExperts,
+        # Llava
+        LlavaForConditionalGeneration: QEffLlavaForConditionalGeneration,
+        # Llava Next
+        LlavaNextForConditionalGeneration: QEffLlavaNextForConditionalGeneration,
+        # Gemma
+        GemmaAttention: QEffGemmaAttention,
+        GemmaDecoderLayer: QEffGemmaDecoderLayer,
+        GemmaModel: QEffGemmaModel,
+        GemmaForCausalLM: QEffGemmaForCausalLM,
+        # Gemma2
+        Gemma2Attention: QEffGemma2Attention,
+        Gemma2DecoderLayer: QEffGemma2DecoderLayer,
+        Gemma2Model: QEffGemma2Model,
+        Gemma2ForCausalLM: QEffGemma2ForCausalLM,
+        # Gemma3
+        Gemma3Attention: QEffGemma3Attention,
+        Gemma3DecoderLayer: QEffGemma3DecoderLayer,
+        Gemma3TextModel: QEffGemma3TextModel,
+        Gemma3ForCausalLM: QEffGemma3ForCausalLMModel,
+        Gemma3ForConditionalGeneration: QEffGemma3ForConditionalGeneration,
+        # Granite
+        GraniteModel: QEffGraniteModel,
+        GraniteForCausalLM: QEffGraniteForCausalLM,
+        GraniteAttention: QEffGraniteAttention,
+        # GraniteMoe
+        GraniteMoeModel: QEffGraniteMoeModel,
+        GraniteMoeForCausalLM: QEffGraniteMoeForCausalLM,
+        GraniteMoeAttention: QEffGraniteMoeAttention,
+        GraniteMoeRotaryEmbedding: QEffGraniteMoeRotaryEmbedding,
+        GraniteMoeParallelExperts: QEffGraniteMoeParallelExperts,
+        GraniteMoeTopKGating: QEffGraniteMoeTopKGating,
+        GraniteMoeMoE: QEffGraniteMoeMoE,
+        # mllama
+        MllamaTextRMSNorm: CustomRMSNormAIC,
+        MllamaTextSelfAttention: QEffMllamaTextSelfAttention,
+        MllamaSelfAttentionDecoderLayer: QEffMllamaSelfAttentionDecoderLayer,
+        MllamaCrossAttentionDecoderLayer: QEffMllamaCrossAttentionDecoderLayer,
+        MllamaRotaryEmbedding: QEffMllamaRotaryEmbedding,
+        MllamaVisionModel: QEffMllamaVisionModel,
+        MllamaTextModel: QEffMllamaTextModel,
+        MllamaForCausalLM: QEffMllamaForCausalLM,
+        MllamaForConditionalGeneration: QEffMllamaForConditionalGeneration,
+        # Mistral
+        MistralAttention: QEffMistralAttention,
+        MistralDecoderLayer: QEffMistralDecoderLayer,
+        MistralModel: QEffMistralModel,
+        MistralForCausalLM: QEffMistralForCausalLM,
+        # Mixtral
+        MixtralAttention: QEffMixtralAttention,
+        MixtralSparseMoeBlock: QEffMixtralSparseMoeBlock,
+        MixtralDecoderLayer: QeffMixtralDecoderLayer,
+        MixtralModel: QEffMixtralModel,
+        MixtralForCausalLM: QEffMixtralForCausalLM,
+        # Mpt
+        MptAttention: QEffMptAttention,
+        MptBlock: QEffMptBlock,
+        MptModel: QEFfMptModel,
+        MptForCausalLM: QEffMptForCausalLM,
+        # Phi3
+        Phi3Attention: QEffPhi3Attention,
+        Phi3DecoderLayer: QEffPhi3DecoderLayer,
+        Phi3Model: QEffPhi3Model,
+        Phi3ForCausalLM: QEffPhi3ForCausalLM,
+        # Phi
+        PhiAttention: QEffPhiAttention,
+        PhiDecoderLayer: QEffPhiDecoderLayer,
+        PhiModel: QEffPhiModel,
+        PhiForCausalLM: QEffPhiForCausalLM,
+        # Qwen2
+        Qwen2Attention: QEffQwen2Attention,
+        Qwen2DecoderLayer: QEffQwen2DecoderLayer,
+        Qwen2Model: QEffQwen2Model,
+        Qwen2ForCausalLM: QEffQwen2ForCausalLM,
+        # Starcoder2
+        Starcoder2Attention: QEffStarcoder2Attention,
+        Starcoder2DecoderLayer: QEFFStarcoder2DecoderLayer,
+        Starcoder2Model: QEffStarcoder2Model,
+        Starcoder2ForCausalLM: QEffStarcoder2ForCausalLM,
+        # GptBigcode
+        GPTBigCodeAttention: QEffGPTBigCodeAttention,
+        GPTBigCodeBlock: QEffGPTBigCodeBlock,
+        GPTBigCodeModel: QEffGPTBigCodeModel,
+        GPTBigCodeForCausalLM: QEffGPTBigCodeForCausalLM,
+        # Whisper encoder and decoder layers
+        WhisperPositionalEmbedding: QEffWhisperPositionalEmbedding,
+        WhisperAttention: QEffWhisperAttention,
+        WhisperDecoderLayer: QEffWhisperDecoderLayer,
+        WhisperEncoder: QEffWhisperEncoder,
+        WhisperDecoder: QEffWhisperDecoder,
+        WhisperModel: QEffWhisperModel,
+        WhisperForConditionalGeneration: QEffWhisperForConditionalGeneration,
+    }
+
+    @classmethod
+    def apply(cls, model: nn.Module) -> Tuple[nn.Module, bool]:
+        model, transformed = super().apply(model)
+        return model, transformed
+    
+class NRKVCacheTransform(ModuleMappingTransform):
+    _module_mapping = {
+        # CodeGen
+        CodeGenAttention: QEffCodeGenAttention,
+        CodeGenBlock: QeffCodeGenBlock,
+        CodeGenModel: QEffCodeGenModel,
+        CodeGenForCausalLM: QEffCodeGenForCausalLM,
+        # Falcon
+        FalconAttention: QEffFalconAttention,
+        FalconDecoderLayer: QEffFalconDecoderLayer,
+        FalconModel: QEffFalconModel,
+        FalconForCausalLM: QEffFalconForCausalLM,
+        # GPT2
+        GPT2Attention: QEffGPT2Attention,
+        GPT2Block: QEffGPT2Block,
+        GPT2Model: QEffGPT2Model,
+        GPT2LMHeadModel: QEffGPT2LMHeadModel,
+        # GPTJ
+        GPTJAttention: QEffGPTJAttention,
+        GPTJBlock: QEffGPTJBlock,
+        GPTJModel: QEffGPTJModel,
+        GPTJForCausalLM: QEffGPTJForCausalLM,
+        # Llama
+        LlamaAttention: QEffLlamaAttention,
+        LlamaDecoderLayer: QEffLlamaDecoderLayer,
+        LlamaModel: QEffLlamaPipelineStage,
+        LlamaForCausalLM: QEffLlamaPipelineForCausalLM,
         # Llama4
         Llama4TextAttention: QEffLlama4TextAttention,
         Llama4ForCausalLM: QEffLlama4ForCausalLM,
